@@ -40,10 +40,15 @@ History:
     3.) Forked by Wallace Everest for Blender 3.1 and large data sets. Added function calls, polygon merge and memory handling.
         https://github.com/WallieEverest/gdsiistl
 
+Attribution:
+    Polygon merge merthod derived from Lucas Gabrielli in the gdspy library
+    https://github.com/heitzmann/gdspy/issues/166
+
 To do:
     1.) Filter for-each-loop on tuples
     2.) Detect external layerstack.json in the gds folder
     3.) Create Blender scripts for default fabric settings
+    4.) Remove printf debug notes
 """
 
 import sys # read command-line arguments
@@ -85,31 +90,30 @@ layerstack = {
     # (83,44): (0, 0.1, 'text'),
 }
 
-def filter_layer(layer_num):
-    """Function to filter layers"""
-    print(f'Filtering layer {layer_num}')
+def filter_layer(layer_index):
+    """Function to filter unused elements from layers"""
     for name, cell in gdsii.cells.items():
         cell.remove_labels(lambda text: any)
         cell.remove_paths(lambda points: any)
-        cell.remove_polygons(lambda points, layer, datatype: layer != layer_num)
+        # DEBUG: Implement datatype constraint
+        cell.remove_polygons(lambda points, layer, datatype: layer != layer_index)
 
-def flatten_layer():
+def flatten_heirarchy():
     """Function to flatten layers"""
-    for cell in gdsii.top_level():
-        cell_name = cell.name  # save top-level name, assumed only one top-level cell in GDS file
-        print('Before - Labels:{} References:{} Polygons:{} Paths:{}'.format( \
-            len(cell.labels),len(cell.references),len(cell.polygons),len(cell.paths)))
-        print(f'Flattening...')
+    top_cells = gdsii.top_level()
+    for cell in top_cells:
+        cell_name = cell.name  # save top-level name
+        sys.stdout.write(f'Flattening references:{len(cell.references)} polygons:{len(cell.polygons)}')
         cell.flatten()
-        print('After  - Labels:{} References:{} Polygons:{} Paths:{}'.format( \
-            len(cell.labels),len(cell.references),len(cell.polygons),len(cell.paths)))
+        sys.stdout.write(f'-> references:{len(cell.references)} polygons:{len(cell.polygons)}\n')
 
-    # removing flattened standard cells
+    # Remove referenced cells that were flattened
+    # DEBUG: Assumes only one top-level cell in unflattened GDS file
     for cell in gdsii.top_level():
         if cell.name != cell_name:
             gdsii.remove(cell)
 
-def merge_layers_and_datatypes(cell):
+def merge_polygons(cell):
     """Function to merge polygons"""
     # copy unordered polygonSets into a layered dict structure
     polydict = collections.defaultdict(list)
@@ -123,7 +127,7 @@ def merge_layers_and_datatypes(cell):
     for lnum, polyarray in polydict.items():
         if lnum in layerstack.keys():
             _, _, layername = layerstack[lnum]
-            sys.stdout.write(f"Layer {layername}: {len(polyarray)} polygons")
+            sys.stdout.write(f'layer:{layername} polygons:{len(polyarray)}')
             result = gdspy.boolean(polyarray, None, "or")
             if result is not None:
                 for polygon in result.polygons:
@@ -131,13 +135,16 @@ def merge_layers_and_datatypes(cell):
                     cell.add(gdspy.PolygonSet([[0,0]], layer=lnum[0], datatype=lnum[1]))
                     index = len(cell.polygons)
                     cell.polygons[index-1].polygons[0] = polygon
-                print(f" merged to {len(result.polygons)}")
+                sys.stdout.write(f' -> polygons:{len(result.polygons)}\n')
+            else:
+                sys.stdout.write(f' -> empty\n')
         else:
-            print(f"Layer {lnum}: {len(polyarray)} polygons")
+            sys.stdout.write(f'layer:{lnum} polygons:{len(polyarray)}\n')
 
+        # Release memory
         polydict[lnum] = []
 
-def layers_to_polygons():
+def extract_polygons():
     """Function to extract polygons to a dictionary"""
     cells = gdsii.top_level() # get all cells that aren't referenced by another
     for cell in cells: # loop through cells to read paths and polygons
@@ -154,23 +161,23 @@ def layers_to_polygons():
         print(f"Processing cell {cell.name}")
 
         # Boolean merge overlaping polygons
-        sys.stdout.write('Pass 1 - ')
-        merge_layers_and_datatypes(cell)
-        sys.stdout.write('Pass 2 - ')
-        merge_layers_and_datatypes(cell)
-        sys.stdout.write('Pass 3 - ')
-        merge_layers_and_datatypes(cell)
-        sys.stdout.write('Pass 4 - ')
-        merge_layers_and_datatypes(cell)
+        sys.stdout.write('Merge pass 1 - ')
+        merge_polygons(cell)
+        sys.stdout.write('Merge pass 2 - ')
+        merge_polygons(cell)
+        sys.stdout.write('Merge pass 3 - ')
+        merge_polygons(cell)
+        sys.stdout.write('Merge pass 4 - ')
+        merge_polygons(cell)
 
         # loop through paths in cell
-        for path in cell.paths:
-            lnum = (path.layers[0],path.datatypes[0]) # GDSII layer number
-            # create empty array to hold layer polygons if it doesn't yet exist
-            layers[lnum] = [] if not lnum in layers else layers[lnum]
-            # add paths (converted to polygons) that layer
-            for poly in path.get_polygons():
-                layers[lnum].append((poly, None, False))
+        # for path in cell.paths:
+        #     lnum = (path.layers[0],path.datatypes[0]) # GDSII layer number
+        #     # create empty array to hold layer polygons if it doesn't yet exist
+        #     layers[lnum] = [] if not lnum in layers else layers[lnum]
+        #     # add paths (converted to polygons) that layer
+        #     for poly in path.get_polygons():
+        #         layers[lnum].append((poly, None, False))
 
         # loop through polygons (and boxes) in cell
         for polygon in cell.polygons:
@@ -396,7 +403,7 @@ def not_in_layer_list(layer_index):
 # First, the input file is read using the gdspy library, which interprets the
 # GDSII file and formats the data Python-style.
 # See https://gdspy.readthedocs.io/en/stable/index.html for documentation.
-# Second, the boundaries of each shape (polygon or path) are extracted for
+# Second, the boundaries of each polygon are extracted for
 # further processing.
 
 # --- Main Routine ---
@@ -405,16 +412,20 @@ gdsii = gdspy.GdsLibrary()
 gdsii.read_gds(gdsii_file_path, units='import')
 top_cells = gdsii.top_level()
 for layer_index in top_cells[0].get_layers():  # presumes only one top-level cell
+    # DEBUG: Implement datatype constraint
+    #for datatype_index in top_cells[0].get_datatypes():
+    #DEBUG: Next tuple if there are no polygons
     if not_in_layer_list(layer_index):
         continue
+    print(f'Filtering layer {layer_index}')
     gdsii = gdspy.GdsLibrary()
     gdsii.read_gds(gdsii_file_path, units='import')
     filter_layer(layer_index)
-    gdsii.write_gds('temp.gds')  # only cells from the selected layr are contained in the file
+    gdsii.write_gds('temp.gds')  # only cells from the selected layer are contained in the file
 
     gdsii = gdspy.GdsLibrary()  # Renew library configuration
     gdsii.read_gds('temp.gds', units='import')
-    flatten_layer()
+    flatten_heirarchy()
     gdsii.write_gds('temp.gds')
 
     gdsii = gdspy.GdsLibrary()  # Renew library configuration
@@ -422,7 +433,7 @@ for layer_index in top_cells[0].get_layers():  # presumes only one top-level cel
 
     print('Extracting polygons...')
     layers = {} # array to hold all geometry, sorted into layers
-    layers_to_polygons()
+    extract_polygons()
 
     print('Triangulating polygons...')
     num_triangles = {} # will store the number of triangles for each layer
