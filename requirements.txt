@@ -2,3 +2,5 @@ numpy
 gdspy
 numpy-stl
 triangle
+sys
+collections
