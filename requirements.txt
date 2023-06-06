@@ -3,4 +3,5 @@ gdspy
 numpy-stl
 triangle
 sys
+os
 collections
