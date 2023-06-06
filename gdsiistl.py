@@ -51,13 +51,14 @@ import gdspy # open gds file
 from stl import mesh # write stl file (python package name is "numpy-stl")
 import numpy as np # fast math on lots of points
 import triangle # triangulate polygons
+import os
 import collections
 
 # get the input file name
 if len(sys.argv) < 2: # sys.argv[0] is the name of the program
     #print("Error: need exactly one file as a command line argument.")
     #sys.exit(0)
-    gdsii_file_path = './gds/sample.gds'
+    gdsii_file_path = os.path.dirname(__file__)+'/gds/sample.gds'
 else:
     gdsii_file_path = sys.argv[1]
 
@@ -379,8 +380,7 @@ def extrude_triangles():
             layer_pointer += len(faces)
 
         # save layer to STL file
-        #filename = gdsii_file_path + '_{}.stl'.format(layername)
-        filename = './stl/{}.stl'.format(layername)
+        filename = os.path.dirname(__file__)+'/stl/{}.stl'.format(layername)
         print('    ({}, {}) to {}'.format(layer, layername, filename))
         layer_mesh_object = mesh.Mesh(layer_mesh_data, remove_empty_areas=False)
         layer_mesh_object.save(filename)
@@ -400,25 +400,28 @@ def not_in_layer_list(layer_index):
 # further processing.
 
 # --- Main Routine ---
-print('Reading GDSII file {}...'.format(gdsii_file_path))
+temp_file = os.path.dirname(__file__)+'/temp.gds'
+layerstack_file = os.path.dirname(__file__)+'/temp.gds'
+print('Reading GDSII file {}'.format(gdsii_file_path))
 gdsii = gdspy.GdsLibrary()
 gdsii.read_gds(gdsii_file_path, units='import')
 top_cells = gdsii.top_level()
+print(f'Layers:{top_cells[0].get_layers()}')
 for layer_index in top_cells[0].get_layers():  # presumes only one top-level cell
-    if not_in_layer_list(layer_index):
-        continue
+    #if not_in_layer_list(layer_index):
+    #    continue
     gdsii = gdspy.GdsLibrary()
     gdsii.read_gds(gdsii_file_path, units='import')
     filter_layer(layer_index)
-    gdsii.write_gds('temp.gds')  # only cells from the selected layr are contained in the file
+    gdsii.write_gds(temp_file)  # only cells from the selected layer are contained in the file
 
     gdsii = gdspy.GdsLibrary()  # Renew library configuration
-    gdsii.read_gds('temp.gds', units='import')
+    gdsii.read_gds(temp_file, units='import')
     flatten_layer()
-    gdsii.write_gds('temp.gds')
+    gdsii.write_gds(temp_file)
 
     gdsii = gdspy.GdsLibrary()  # Renew library configuration
-    gdsii.read_gds('temp.gds', units='import')
+    gdsii.read_gds(temp_file, units='import')
 
     print('Extracting polygons...')
     layers = {} # array to hold all geometry, sorted into layers
