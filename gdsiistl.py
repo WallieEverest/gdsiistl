@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+File:
+    gdsiistl.py
+
 Description:
     This program converts a GDSII 2D layout file to multiple 3D STL files that can
     be visualized in an external program (e.g., Blender).
@@ -13,7 +16,7 @@ Usage:
     or
     - include an external layerstack.json file in the gds folder
     then
-    - run "gdsiistl file.gds"
+    - run "gdsiistl {path}{file.gds}"
     or
     - run "gdsiistl' for the default file "./gds/sample.gds"
     and/or
@@ -96,9 +99,9 @@ def flatten_heirarchy():
     """Function to flatten layers"""
     original_cells = gdsii.top_level()
     for cell in original_cells:
-        sys.stdout.write(f'Flattening references:{len(cell.references)} polygons:{len(cell.polygons)}')
+        sys.stdout.write(f'Flattening (references:{len(cell.references)}, polygons:{len(cell.polygons)})')
         cell.flatten()  # combine will all referenced cells (instances, SREFs, AREFs, etc.)
-        sys.stdout.write(f' -> references:{len(cell.references)} polygons:{len(cell.polygons)}\n')
+        sys.stdout.write(f'->(references:{len(cell.references)}, polygons:{len(cell.polygons)})\n')
 
     # Remove referenced cells that were flattened
     for cell in gdsii.top_level():
@@ -116,20 +119,20 @@ def merge_polygons(cell):
     # Transfer layer-ordered polygons back into a polygonSet
     cell.polygons = []
     for lnum, polyarray in polydict.items():
-        if lnum in layerstack.keys():
-            sys.stdout.write(f'polygons:{len(polyarray)}')
-            result = gdspy.boolean(polyarray, None, "or")
-            if result is not None:
-                for polygon in result.polygons:
-                    # Append a new polygonSet object and assign an individual polygon
-                    cell.add(gdspy.PolygonSet([[0,0]], layer=lnum[0], datatype=lnum[1]))
-                    index = len(cell.polygons)
-                    cell.polygons[index-1].polygons[0] = polygon
-                sys.stdout.write(f' -> polygons:{len(result.polygons)}\n')
-            else:
-                sys.stdout.write(f' -> empty\n')
+        #if lnum in layerstack.keys():
+        sys.stdout.write(f'polygons:{len(polyarray)}')
+        result = gdspy.boolean(polyarray, None, "or")
+        if result is not None:
+            for polygon in result.polygons:
+                # Append a new polygonSet object and assign an individual polygon
+                cell.add(gdspy.PolygonSet([[0,0]], layer=lnum[0], datatype=lnum[1]))
+                index = len(cell.polygons)
+                cell.polygons[index-1].polygons[0] = polygon
+            sys.stdout.write(f'->{len(result.polygons)}')
         else:
-            sys.stdout.write(f'layer:{lnum} polygons:{len(polyarray)}\n')
+            sys.stdout.write(f'->empty')
+        #else:
+        #    sys.stdout.write(f'layer:{lnum} polygons:{len(polyarray)}\n')
 
 def extract_polygons():
     """Function to extract polygons to a dictionary"""
@@ -145,14 +148,15 @@ def extract_polygons():
         sys.stdout.write(f'Extracting polygons for cell:{cell.name}\n')
 
         # Boolean merge overlaping polygons
-        sys.stdout.write('Merge pass 1 - ')
+        sys.stdout.write('Merge [1]: ')
         merge_polygons(cell)
-        sys.stdout.write('Merge pass 2 - ')
+        sys.stdout.write(', [2]: ')
         merge_polygons(cell)
-        sys.stdout.write('Merge pass 3 - ')
+        sys.stdout.write(', [3]: ')
         merge_polygons(cell)
-        sys.stdout.write('Merge pass 4 - ')
+        sys.stdout.write(', [4]: ')
         merge_polygons(cell)
+        sys.stdout.write('\n')
 
         # loop through paths in cell
         # for path in cell.paths:
@@ -199,7 +203,6 @@ and third element is False (whether the polygon is clockwise; will be updated).
 
 def polygon_to_triangles():
     """Function to convert polygons to triangles"""
-    sys.stdout.write(f'Triangulating polygons...\n')
     for layer_dataset, polygons in layers.items():
         num_triangles[layer_dataset] = 0  # initialize key and empty value
 
@@ -392,13 +395,14 @@ if len(sys.argv) < 2: # sys.argv[0] is the name of the program
 else:
     gdsii_file = sys.argv[1]  # get the input file name
 
-sys.stdout.write(f'Reading GDSII file {gdsii_file}')
+sys.stdout.write(f'Reading GDSII file {gdsii_file}\n')
 gdsii = gdspy.GdsLibrary()
 gdsii.read_gds(gdsii_file, units='import')
 top_cells = gdsii.top_level()
 layer_list = top_cells[0].get_layers()
+sys.stdout.write(f'layers:{layer_list}\n')
 datatype_list = top_cells[0].get_datatypes()
-sys.stdout.write(f'layers:{layer_list} datatypes:{datatype_list}\n\n')
+sys.stdout.write(f'datatypes:{datatype_list}\n\n')
 for layer_index in layer_list:  # presumes only one top-level cell
     for datatype_index in datatype_list:
         gds_layer = (layer_index, datatype_index)  # GDSII layer tuple
@@ -421,6 +425,7 @@ for layer_index in layer_list:  # presumes only one top-level cell
         gdsii.read_gds(temp_file, units='import')
         layers = {}  # array to hold all geometry
         extract_polygons()
+        sys.stdout.write(f"Triangulating layer:{gds_layer} '{layer_name}'\n")
         num_triangles = {}  # store the number of triangles
         polygon_to_triangles()
         extrude_triangles() # extrude polygons and write to file
