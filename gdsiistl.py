@@ -10,16 +10,17 @@ Note:
 
 Usage:
     - edit the "layerstack" variable in the "CONFIGURATION" section below
+    or
+    - include an external layerstack.json file in the gds folder
+    then
     - run "gdsiistl file.gds"
-
     or
     - run "gdsiistl' for the default file "./gds/sample.gds"
-
     and/or
     - include the file "./gds/layerstack.json" to override the default configuration values
 
     Output:
-        - the files ./stl/layername1.stl, ./stl/layername2.stl, ...
+        - the files ./stl/layer_name1.stl, ./stl/layer_name2.stl, ...
 
 Operation:
     The program takes one argument, a path to a GDSII file. It reads shapes from
@@ -35,20 +36,21 @@ License:
 History:
     1.) Original script by David Teal
         https://github.com/dteal/gdsiistl
-    2.) Forked by Maximo Balestrini for SkyWater130. Added (layer, dataset) tuple filtering.
+    2.) Forked by Maximo Balestrini for the  SkyWater Sky130A PDK.
+        Added (layer, dataset) tuple filtering.
         https://github.com/mbalestrini/gdsiistl
-    3.) Forked by Wallace Everest for Blender 3.1 and large data sets. Added function calls, polygon merge and memory handling.
+    3.) Forked by Wallie Everest for Blender 3.1 and large data sets.
+        Added function calls, polygon merge and memory handling.
         https://github.com/WallieEverest/gdsiistl
 
 Attribution:
-    Polygon merge merthod derived from Lucas Gabrielli in the gdspy library
+    Polygon merge method derived from Lucas Gabrielli in the gdspy library issue:
     https://github.com/heitzmann/gdspy/issues/166
+    Documentation on the gdspy API can be found at:
+    https://gdspy.readthedocs.io/en/stable/
 
 To do:
-    1.) Filter for-each-loop on tuples
-    2.) Detect external layerstack.json in the gds folder
-    3.) Create Blender scripts for default fabric settings
-    4.) Remove printf debug notes
+    1.) Create Blender scripts for default fabric settings
 """
 
 import sys # read command-line arguments
@@ -58,25 +60,18 @@ import numpy as np # fast math on lots of points
 import triangle # triangulate polygons
 import os
 import collections
-
-# get the input file name
-if len(sys.argv) < 2: # sys.argv[0] is the name of the program
-    #print("Error: need exactly one file as a command line argument.")
-    #sys.exit(0)
-    gdsii_file_path = os.path.dirname(__file__)+'/gds/sample.gds'
-else:
-    gdsii_file_path = sys.argv[1]
+import json
 
 ########## CONFIGURATION (EDIT THIS PART) #####################################
-# choose which GDSII layers to use
+# Default values if an external layerstack file does not exist
 layerstack = {
-    # (layernumber, datatype) : (zmin, zmax, 'layername'),
-    (235,4): (0, 0.1, 'sub'),
+    # (layernumber, datatype) : (zmin, zmax, 'layer_name'),
+    (235,4): (0, 0.1, 'prbndry'),
     (64,20): (0, 0.1, 'nwell'),    
     (65,44): (0, 0.1, 'tap'),    
     (65,20): (0, 0.1, 'diff'),    
     (66,20): (0, 0.1, 'poly'),    
-    (66,44): (0, 0.1, 'licon'),    
+    (66,44): (0, 0.1, 'licon1'),    
     (67,20): (0, 0.1, 'li1'),    
     (67,44): (0, 0.1, 'mcon'),    
     (68,20): (0, 0.1, 'met1'),    
@@ -88,51 +83,45 @@ layerstack = {
     (71,20): (0, 0.1, 'met4'),    
     (71,44): (0, 0.1, 'via4'),    
     (72,20): (0, 0.1, 'met5'),
-    # (83,44): (0, 0.1, 'text'),
 }
 
-def filter_layer(layer_index):
-    """Function to filter unused elements from layers"""
-    for name, cell in gdsii.cells.items():
+def filter_layer(gds_layer):
+    """Function to filter unused 3D elements from layers"""
+    for _, cell in gdsii.cells.items():
         cell.remove_labels(lambda text: any)
         cell.remove_paths(lambda points: any)
-        # DEBUG: Implement datatype constraint
-        cell.remove_polygons(lambda points, layer, datatype: layer != layer_index)
+        cell.remove_polygons(lambda points, layer, datatype: (layer, datatype) != gds_layer)
 
 def flatten_heirarchy():
     """Function to flatten layers"""
-    top_cells = gdsii.top_level()
-    for cell in top_cells:
-        cell_name = cell.name  # save top-level name
+    original_cells = gdsii.top_level()
+    for cell in original_cells:
         sys.stdout.write(f'Flattening references:{len(cell.references)} polygons:{len(cell.polygons)}')
-        cell.flatten()
-        sys.stdout.write(f'-> references:{len(cell.references)} polygons:{len(cell.polygons)}\n')
+        cell.flatten()  # combine will all referenced cells (instances, SREFs, AREFs, etc.)
+        sys.stdout.write(f' -> references:{len(cell.references)} polygons:{len(cell.polygons)}\n')
 
     # Remove referenced cells that were flattened
-    # DEBUG: Assumes only one top-level cell in unflattened GDS file
     for cell in gdsii.top_level():
-        if cell.name != cell_name:
-            gdsii.remove(cell)
+        if not cell in original_cells:
+            gdsii.remove(cell)  # remove if not an original top cell
 
 def merge_polygons(cell):
     """Function to merge polygons"""
-    # copy unordered polygonSets into a layered dict structure
+    # Copy unordered polygonSets into a layered dict structure
     polydict = collections.defaultdict(list)
     for polyset in cell.polygons:
         for l, d, polyarray in zip(polyset.layers, polyset.datatypes, polyset.polygons):
             polydict[(l, d)].append(polyarray)
 
-    # merge polygons on each layer
-    # transfer layer-ordered polygons back into a polygonSet
+    # Transfer layer-ordered polygons back into a polygonSet
     cell.polygons = []
     for lnum, polyarray in polydict.items():
         if lnum in layerstack.keys():
-            _, _, layername = layerstack[lnum]
-            sys.stdout.write(f'layer:{layername} polygons:{len(polyarray)}')
+            sys.stdout.write(f'polygons:{len(polyarray)}')
             result = gdspy.boolean(polyarray, None, "or")
             if result is not None:
                 for polygon in result.polygons:
-                    # append a new polygonSet object and assign an individual polygon
+                    # Append a new polygonSet object and assign an individual polygon
                     cell.add(gdspy.PolygonSet([[0,0]], layer=lnum[0], datatype=lnum[1]))
                     index = len(cell.polygons)
                     cell.polygons[index-1].polygons[0] = polygon
@@ -142,24 +131,18 @@ def merge_polygons(cell):
         else:
             sys.stdout.write(f'layer:{lnum} polygons:{len(polyarray)}\n')
 
-        # Release memory
-        polydict[lnum] = []
-
 def extract_polygons():
     """Function to extract polygons to a dictionary"""
-    cells = gdsii.top_level() # get all cells that aren't referenced by another
-    for cell in cells: # loop through cells to read paths and polygons
+    cells = gdsii.top_level()  # get all cells that aren't referenced by another
+    for cell in cells:  # loop through cells to read paths and polygons
 
         # $$$CONTEXT_INFO$$$ is a separate, non-standard compliant cell added
         # optionally by KLayout to store extra information not needed here.
         # see https://www.klayout.de/forum/discussion/1026/very-
         # important-gds-exported-from-k-layout-not-working-on-cadence-at-foundry
         if cell.name == '$$$CONTEXT_INFO$$$':
-            continue # skip this cell
-
-        # combine will all referenced cells (instances, SREFs, AREFs, etc.)
-        #cell = cell.flatten()
-        print(f"Processing cell {cell.name}")
+            continue  # skip this cell
+        sys.stdout.write(f'Extracting polygons for cell:{cell.name}\n')
 
         # Boolean merge overlaping polygons
         sys.stdout.write('Merge pass 1 - ')
@@ -173,7 +156,7 @@ def extract_polygons():
 
         # loop through paths in cell
         # for path in cell.paths:
-        #     lnum = (path.layers[0],path.datatypes[0]) # GDSII layer number
+        #     lnum = (path.layers[0],path.datatypes[0]) # GDSII layer numtupleber
         #     # create empty array to hold layer polygons if it doesn't yet exist
         #     layers[lnum] = [] if not lnum in layers else layers[lnum]
         #     # add paths (converted to polygons) that layer
@@ -182,7 +165,7 @@ def extract_polygons():
 
         # loop through polygons (and boxes) in cell
         for polygon in cell.polygons:
-            lnum = (polygon.layers[0],polygon.datatypes[0]) # same as before...
+            lnum = (polygon.layers[0],polygon.datatypes[0]) # GDSII layer tuple
             layers[lnum] = [] if not lnum in layers else layers[lnum]
             for poly in polygon.polygons:
                 layers[lnum].append((poly, None, False))
@@ -216,21 +199,15 @@ and third element is False (whether the polygon is clockwise; will be updated).
 
 def polygon_to_triangles():
     """Function to convert polygons to triangles"""
-    # loop through all layers
-    for layer_number, polygons in layers.items():
+    sys.stdout.write(f'Triangulating polygons...\n')
+    for layer_dataset, polygons in layers.items():
+        num_triangles[layer_dataset] = 0  # initialize key and empty value
 
-        # but skip layer if it won't be exported
-        if not layer_number in layerstack.keys():
-            continue
-
-        num_triangles[layer_number] = 0
-
-        # loop through polygons in layer
+        # Loop through polygons in layer
         for index, (polygon, _, _) in enumerate(polygons):
-
             num_polygon_points = len(polygon)
 
-            # determine whether polygon points are CW or CCW
+            # Determine whether polygon points are CW or CCW
             area = 0
             for i, v1 in enumerate(polygon): # loop through vertices
                 v2 = polygon[(i+1) % num_polygon_points]
@@ -246,7 +223,7 @@ def polygon_to_triangles():
             points_i = polygon # get list of points
             points_j = np.roll(points_i, -1, axis=0) # shift by 1
             points_k = np.roll(points_i, 1, axis=0) # shift by -1
-            # calculate normals for each edge of each vertex (in parallel, for speed)
+            # Calculate normals for each edge of each vertex (in parallel, for speed)
             normal_ij = np.stack((points_j[:, 1]-points_i[:, 1],
                                 points_i[:, 0]-points_j[:, 0]), axis=1)
             normal_ik = np.stack((points_i[:, 1]-points_k[:, 1],
@@ -258,7 +235,7 @@ def polygon_to_triangles():
             if clockwise:
                 normal_ij = -1*normal_ij
                 normal_ik = -1*normal_ik
-            # move each vertex inward along its two edge normals
+            # Move each vertex inward along its two edge normals
             polygon = points_i - delta*normal_ij - delta*normal_ik
 
             # In an extreme case of the above, the polygon edge doubles back on
@@ -282,7 +259,7 @@ def polygon_to_triangles():
             # this is disabled. TODO: figure out why this happens and fix it.
             use_holes = False
 
-            # triangulate: compute triangles to fill polygon
+            # Triangulate: compute triangles to fill polygon
             point_array = np.arange(num_polygon_points)
             edges = np.transpose(np.stack((point_array, np.roll(point_array, 1))))
             if use_holes:
@@ -296,9 +273,9 @@ def polygon_to_triangles():
             if not 'triangles' in triangles.keys():
                 triangles['triangles'] = []
 
-            # each line segment will make two triangles (for a rectangle), and the polygon
+            # Each line segment will make two triangles (for a rectangle), and the polygon
             # triangulation will be copied on the top and bottom of the layer.
-            num_triangles[layer_number] += num_polygon_points*2 + \
+            num_triangles[layer_dataset] += num_polygon_points*2 + \
                                         len(triangles['triangles'])*2
             polygons[index] = (polygon, triangles, clockwise)
 
@@ -335,19 +312,14 @@ defined clockwise (so that the STL triangles are oriented correctly).
 
 def extrude_triangles():
     "Function to exrude triangles"
-    for layer in layers:
-
-        # but skip layer if it won't be exported
-        if not layer in layerstack.keys():
-            continue
-
+    for layer_dataset in layers:
         # Make a list of triangles.
         # This data contains vertex xyz position data as follows:
         # layer_mesh_data['vectors'] = [ [[x1,y1,z1], [x2,y2,z1], [x3,y3,z3]], ...]
-        layer_mesh_data = np.zeros(num_triangles[layer], dtype=mesh.Mesh.dtype)
+        layer_mesh_data = np.zeros(num_triangles[layer_dataset], dtype=mesh.Mesh.dtype)
 
         layer_pointer = 0
-        for index, (polygon, triangles, clockwise) in enumerate(layers[layer]):
+        for _, (polygon, triangles, clockwise) in enumerate(layers[layer_dataset]):
 
             # The numpy-stl library expects counterclockwise triangles. That is,
             # one side of each triangle is the outside surface of the STL file
@@ -357,9 +329,9 @@ def extrude_triangles():
             # cause certain STL file display programs to not display the
             # triangles correctly (e.g., the backward triangles will be invisible).
 
-            zmin, zmax, layername = layerstack[layer]
+            #zmin, zmax, layername = layerstack[layer_dataset]
 
-            # make a list of triangles around the polygon boundary
+            # Make a list of triangles around the polygon boundary
             points_i = polygon # list of 2D vertices
             if clockwise: # order polygon 2D vertices counter-clockwise
                 points_i = np.flip(polygon, axis=0)
@@ -370,7 +342,7 @@ def extrude_triangles():
             rights = np.stack((points_i_min, points_j_min, points_j_max), axis=1)
             lefts = np.stack((points_j_max, points_i_max, points_i_min), axis=1)
 
-            # make a list of polygon interior (face) triangles
+            # Make a list of polygon interior (face) triangles
             vs = triangles['vertices']
             ts = triangles['triangles']
             if len(ts) > 0:
@@ -386,18 +358,11 @@ def extrude_triangles():
             layer_mesh_data['vectors'][layer_pointer:(layer_pointer+len(faces))] = faces
             layer_pointer += len(faces)
 
-        # save layer to STL file
-        filename = os.path.dirname(__file__)+'/stl/{}.stl'.format(layername)
-        print('    ({}, {}) to {}'.format(layer, layername, filename))
+        # Save layer to STL file
         layer_mesh_object = mesh.Mesh(layer_mesh_data, remove_empty_areas=False)
-        layer_mesh_object.save(filename)
-
-def not_in_layer_list(layer_index):
-    result = True
-    for (layer_number,_) in layerstack.keys():
-        if (layer_index == layer_number):
-            result = False
-    return result
+        file_name = os.path.join(path, 'stl', layer_name + '.stl')
+        sys.stdout.write(f'Writing file {file_name}\n\n')
+        layer_mesh_object.save(file_name)
 
 ########## INPUT ##############################################################
 # First, the input file is read using the gdspy library, which interprets the
@@ -407,42 +372,59 @@ def not_in_layer_list(layer_index):
 # further processing.
 
 # --- Main Routine ---
-temp_file = os.path.dirname(__file__)+'/temp.gds'
-layerstack_file = os.path.dirname(__file__)+'/temp.gds'
-print('Reading GDSII file {}'.format(gdsii_file_path))
+path = os.path.dirname(__file__)
+temp_file = os.path.join(path, 'temp.gds')
+layerstack_file = os.path.join(path, 'gds', 'layerstack.json')
+
+# Remove old STL files
+for file_name in os.listdir(os.path.join(path, 'stl')):
+    if file_name.endswith('.stl'):
+        os.remove(os.path.join(path, 'stl', file_name))
+
+# Import layerstack if external file exists
+if os.path.exists(layerstack_file):
+    with open(layerstack_file, 'r') as infile:
+        json_string = json.load(infile)
+        layerstack = {tuple(json.loads(k)): tuple(json.loads(v)) for k, v in json_string.items()}
+
+if len(sys.argv) < 2: # sys.argv[0] is the name of the program
+    gdsii_file = os.path.join(path, 'gds', 'sample.gds')
+else:
+    gdsii_file = sys.argv[1]  # get the input file name
+
+sys.stdout.write(f'Reading GDSII file {gdsii_file}')
 gdsii = gdspy.GdsLibrary()
-gdsii.read_gds(gdsii_file_path, units='import')
+gdsii.read_gds(gdsii_file, units='import')
 top_cells = gdsii.top_level()
-print(f'Layers:{top_cells[0].get_layers()}')
-for layer_index in top_cells[0].get_layers():  # presumes only one top-level cell
-    # DEBUG: Implement datatype constraint
-    #for datatype_index in top_cells[0].get_datatypes():
-    #DEBUG: Next tuple if there are no polygons
-    if not_in_layer_list(layer_index):
-        continue
-    print(f'Filtering layer {layer_index}')
-    gdsii = gdspy.GdsLibrary()
-    gdsii.read_gds(gdsii_file_path, units='import')
-    filter_layer(layer_index)
-    gdsii.write_gds(temp_file)  # only cells from the selected layer are contained in the file
+layer_list = top_cells[0].get_layers()
+datatype_list = top_cells[0].get_datatypes()
+sys.stdout.write(f'layers:{layer_list} datatypes:{datatype_list}\n\n')
+for layer_index in layer_list:  # presumes only one top-level cell
+    for datatype_index in datatype_list:
+        gds_layer = (layer_index, datatype_index)  # GDSII layer tuple
+        if not gds_layer in layerstack.keys():  # continue if not in the layerstack dictionary
+            continue
+        zmin, zmax, layer_name = layerstack[gds_layer]
+        sys.stdout.write(f"Filtering layer:{gds_layer} '{layer_name}'\n")
 
-    gdsii = gdspy.GdsLibrary()  # Renew library configuration
-    gdsii.read_gds(temp_file, units='import')
-    flatten_layer()
-    gdsii.write_gds(temp_file)
+        gdsii = gdspy.GdsLibrary()
+        gdsii.read_gds(gdsii_file, units='import')
+        filter_layer(gds_layer)  # include only cells from the selected layer
+        gdsii.write_gds(temp_file)
 
-    gdsii = gdspy.GdsLibrary()  # Renew library configuration
-    gdsii.read_gds(temp_file, units='import')
+        gdsii = gdspy.GdsLibrary()  # renew library configuration
+        gdsii.read_gds(temp_file, units='import')
+        flatten_heirarchy()
+        gdsii.write_gds(temp_file)
 
-    print('Extracting polygons...')
-    layers = {} # array to hold all geometry, sorted into layers
-    extract_polygons()
+        gdsii = gdspy.GdsLibrary()  # renew library configuration
+        gdsii.read_gds(temp_file, units='import')
+        layers = {}  # array to hold all geometry
+        extract_polygons()
+        num_triangles = {}  # store the number of triangles
+        polygon_to_triangles()
+        extrude_triangles() # extrude polygons and write to file
 
-    print('Triangulating polygons...')
-    num_triangles = {} # will store the number of triangles for each layer
-    polygon_to_triangles()
-
-    print('Extruding polygons and writing to files...')
-    extrude_triangles()
-
-print('Done.')
+if os.path.exists(temp_file):
+    os.remove(temp_file)
+sys.stdout.write('Done.\n\n')
