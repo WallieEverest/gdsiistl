@@ -23,11 +23,13 @@ This script was tested on Windows 11 using Visual Studfio Code, pipenv and 32 GB
 
 ## Perfomance
 
-A typical 3 MB gds file produces a batch of stl files in less than one minute. A 300 MB gds file may require several hours and 10 GB of RAM. Tests indicate an upper processing limit of 1.5 million polygons per layer.
+A 3 MB gds file is converted to stl files in less than one minute. A 300 MB gds file may require several hours and 10 GB of RAM. Tests indicate an upper processing limit of 1.5 million polygons per layer.
 
 ## Portfolio
 
-This video [GDS renders with Blender](https://www.youtube.com/watch?v=gBjQI3GrBHU) is recommended. The special note (26:45) to extend both the camera *and* viewport depth is important if clipping is observed.
+The video [GDS renders with Blender](https://www.youtube.com/watch?v=gBjQI3GrBHU) is recommended. The special note (26:45) to extend both the camera *and* viewport depth is important if clipping is observed.
+
+*Drifting under the TiN (2023)*
 
 ![Blender example](image/drifting_under_the_tin.png)
 
