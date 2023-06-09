@@ -56,9 +56,8 @@ Attribution:
 
 To do:
     1.) Devise better method for detecting implied top-level cell. Perhaps by name.
-        a.) Investigate error 'pop from empty list' in gdspy.boolean function.
-    3.) Create Blender scripts for default fabric settings
-    4.) The local interconnect layer (li1) of the full user_project_wrapper.gds file
+    2.) Create Blender scripts for default fabric settings
+    3.) The local interconnect layer (li1) of the full user_project_wrapper.gds file
         is still too large (3.3M polygons) to process. Hangs during polygpn extraction.
 """
 
@@ -127,7 +126,7 @@ def merge_polygons(cell):
     sys.stdout.write(f'polygons:{len(poly_list)}')
     sys.stdout.flush()
     cell.remove_polygons(lambda points, layer, datatype: any)  # remove old polygons from cell
-    if poly_list is not None:
+    if (poly_list != []):  # skip if empty
         poly_set = gdspy.boolean(poly_list, None, "or")  # create new merged polygon set
         cell.add(poly_set)  # add polygon set back to cell
     sys.stdout.write(f' -> {len(cell.get_polygons())}')
