@@ -55,7 +55,9 @@ Attribution:
     https://gdspy.readthedocs.io/en/stable/
 
 To do:
-    1.) Devise better method for detecting implied top-level cell. Perhaps by name.
+    1.) Devise better method for detecting implied top-level cell.
+        Hierarchies with more than two-levels flatten with
+        library macros intact.
     2.) Create Blender scripts for default fabric settings
     3.) The local interconnect layer (li1) of the full user_project_wrapper.gds file
         is still too large (3.3M polygons) to process. Hangs during polygpn extraction.
@@ -104,7 +106,7 @@ def flatten_hierarchy():
     original_cells = []
     top_list = gdsii.top_level()
     for cell in top_list:
-        if (len(cell.references) != 0):
+        if ((len(cell.references) != 0) or (len(cell.polygons) != 0)):
             original_cells.append(cell)  # list of original top-level cells that contain references
 
     for cell in original_cells:
